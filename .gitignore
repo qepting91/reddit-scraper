@@ -1,0 +1,15 @@
+# Secrets & Config
+.env
+config.yaml
+
+# Data (Do not commit scraped data)
+data/
+*.json
+*.csv
+!input/*.csv
+
+# OS & Editor
+.DS_Store
+.vscode/
+.idea/
+bin/
