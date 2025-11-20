@@ -538,23 +538,32 @@ log_info "Generating test data..."
 
 create_file "input/subreddits.csv" "$(cat <<EOF
 subreddit,min_score
-golang,10
-rust,15
-cybersecurity,25
-netsec,5
-sysadmin,50
-devops,10
+threatintel,5
+cybersecurity,10
+AskNetsec,5
+blueteamsec,5
+sysadmin,10
+msp,5
+netsec,10
+splunk,5
+crowdstrike,5
+MISP,2
 EOF
 )"
 
 create_file "input/keywords.csv" "$(cat <<EOF
 keyword,category
-threat intelligence,security
-zero day,security
-concurrency,programming
-memory leak,programming
-rate limit,architecture
-docker,devops
+Analyst1,threat_intel_platform
+Anomali,threat_intel_platform
+ThreatConnect,threat_intel_platform
+Recorded Future,threat_intel_platform
+ThreatQuotient,threat_intel_platform
+EclecticIQ,threat_intel_platform
+Cyware,threat_intel_platform
+MISP,threat_intel_platform
+OpenCTI,threat_intel_platform
+Mandiant,threat_intel_platform
+ZeroFox,threat_intel_platform
 EOF
 )"
 

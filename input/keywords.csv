@@ -1,7 +1,12 @@
 keyword,category
-threat intelligence,security
-zero day,security
-concurrency,programming
-memory leak,programming
-rate limit,architecture
-docker,devops
+Analyst1,threat_intel_platform
+Anomali,threat_intel_platform
+ThreatConnect,threat_intel_platform
+Recorded Future,threat_intel_platform
+ThreatQuotient,threat_intel_platform
+EclecticIQ,threat_intel_platform
+Cyware,threat_intel_platform
+MISP,threat_intel_platform
+OpenCTI,threat_intel_platform
+Mandiant,threat_intel_platform
+ZeroFox,threat_intel_platform
