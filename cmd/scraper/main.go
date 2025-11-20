@@ -35,16 +35,26 @@ func main() {
 	targets, _ := ingest.LoadTargets("input/subreddits.csv")
 	keywords, _ := ingest.LoadKeywords("input/keywords.csv")
 
-	// 4. Initialize Client
-	client, err := collector.NewClient(
-		os.Getenv("REDDIT_CLIENT_ID"),
-		os.Getenv("REDDIT_CLIENT_SECRET"),
-		os.Getenv("REDDIT_USERNAME"),
-		os.Getenv("REDDIT_PASSWORD"),
-	)
-	if err != nil {
-		logger.Error("Failed to auth with Reddit", "error", err)
-		os.Exit(1)
+	// 4. Initialize Client (Tailored for "Waiting for Access")
+	var client domain.Collector // We use the interface so we can swap Real/Mock
+	var err error
+
+	if os.Getenv("USE_MOCK") == "true" {
+		logger.Info("⚠️  Running in MOCK mode (No API keys required)")
+		client = collector.NewMockClient()
+	} else {
+		// Production Mode
+		client, err = collector.NewClient(
+			os.Getenv("REDDIT_CLIENT_ID"),
+			os.Getenv("REDDIT_CLIENT_SECRET"),
+			os.Getenv("REDDIT_USERNAME"),
+			os.Getenv("REDDIT_PASSWORD"),
+			os.Getenv("REDDIT_USER_AGENT"), // Passed dynamically now
+		)
+		if err != nil {
+			logger.Error("Failed to auth with Reddit", "error", err)
+			os.Exit(1)
+		}
 	}
 
 	// 5. Concurrency Setup (Fan-Out/Fan-In Pattern)
@@ -60,8 +70,8 @@ func main() {
 
 	// Start Workers
 	ctx, cancel := context.WithCancel(context.Background())
-	numWorkers := 4 
-	
+	numWorkers := 4
+
 	for i := 0; i < numWorkers; i++ {
 		workerWg.Add(1)
 		go func(id int) {
@@ -71,13 +81,13 @@ func main() {
 				case <-ctx.Done():
 					return
 				default:
-					// Fetch
+					// Fetch (Uses either Mock or Real client)
 					posts, err := client.FetchNewPosts(ctx, t.Subreddit, 25)
 					if err != nil {
 						logger.Error("Scrape failed", "sub", t.Subreddit, "err", err)
 						continue
 					}
-					
+
 					// Process & Filter
 					for _, p := range posts {
 						for _, k := range keywords {
@@ -104,7 +114,7 @@ func main() {
 	// 7. Graceful Shutdown
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-	
+
 	go func() {
 		<-sigChan
 		logger.Info("Shutdown signal received")
@@ -113,10 +123,10 @@ func main() {
 
 	// Wait for completion
 	workerWg.Wait()
-	close(resultQueue) 
+	close(resultQueue)
 	writerWg.Wait()
 	logger.Info("Scrape complete. Data saved.")
-	
+
 	// Keep alive for dashboard
-	select{} 
+	select {}
 }

@@ -15,12 +15,15 @@ type RedditClient struct {
 	limiter *rate.Limiter
 }
 
-func NewClient(id, secret, user, pass string) (*RedditClient, error) {
+// NewClient now requires a userAgent string to comply with Reddit's API rules
+func NewClient(id, secret, user, pass, userAgent string) (*RedditClient, error) {
 	creds := reddit.Credentials{ID: id, Secret: secret, Username: user, Password: pass}
-	
-	// Using loganintech fork
-	client, err := reddit.NewClient(creds, reddit.WithUserAgent("go:scraper:v1.0 (by /u/qepting91)"))
-	if err != nil { return nil, err }
+
+	// Use the passed userAgent instead of a hardcoded string
+	client, err := reddit.NewClient(creds, reddit.WithUserAgent(userAgent))
+	if err != nil {
+		return nil, err
+	}
 
 	// Rate Limit: Token Bucket Algorithm
 	// 100 requests / 10 mins = ~1 request every 600ms
