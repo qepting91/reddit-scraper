@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"sort"
+	"strings"
 
 	"github.com/go-echarts/go-echarts/v2/charts"
 	"github.com/go-echarts/go-echarts/v2/opts"
@@ -23,12 +24,13 @@ type DashboardView struct {
 	TopTool           string
 	TopSub            string
 	HighestScore      int
+	ActiveFilter      string
 }
 
 func boolPtr(b bool) *bool { return &b }
 
 func StartServer(dataFile string, port string) error {
-	// Clean, high-contrast "Analyst Report" template
+	// Clean, high-contrast "Analyst Report" template with Search Bar
 	tpl := template.Must(template.New("dashboard").Parse(`
 <!DOCTYPE html>
 <html lang="en">
@@ -44,9 +46,17 @@ func StartServer(dataFile string, port string) error {
         .container { max-width: 1400px; margin: 0 auto; }
         
         /* Header Section */
-        .header { background: var(--card); padding: 20px 30px; border-radius: 8px; box-shadow: 0 1px 2px rgba(0,0,0,0.05); margin-bottom: 25px; display: flex; justify-content: space-between; align-items: center; }
+        .header { background: var(--card); padding: 20px 30px; border-radius: 8px; box-shadow: 0 1px 2px rgba(0,0,0,0.05); margin-bottom: 25px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 20px; }
         h1 { margin: 0; font-size: 1.5rem; font-weight: 700; color: #1f2937; }
         .subtitle { font-size: 0.875rem; color: #6b7280; margin-top: 4px; }
+
+        /* Search Form */
+        .search-form { display: flex; gap: 10px; }
+        .search-input { padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; font-size: 0.9rem; width: 250px; }
+        .btn { padding: 8px 16px; border-radius: 6px; border: none; font-weight: 500; cursor: pointer; font-size: 0.9rem; text-decoration: none; display: inline-block; }
+        .btn-primary { background: var(--blue); color: white; }
+        .btn-secondary { background: #f3f4f6; color: #4b5563; border: 1px solid var(--border); }
+        .btn:hover { opacity: 0.9; }
 
         /* KPI Cards */
         .stats-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 20px; margin-bottom: 25px; }
@@ -80,10 +90,14 @@ func StartServer(dataFile string, port string) error {
                 <h1>Intelligence Monitor</h1>
                 <div class="subtitle">Tracking tool mentions across technical subreddits</div>
             </div>
-            <div style="text-align: right;">
-                <div class="stat-label">Data Source</div>
-                <div style="font-weight: 600;">Local JSON</div>
-            </div>
+            
+            <form action="/" method="GET" class="search-form">
+                <input type="text" name="q" class="search-input" placeholder="Filter by keyword (e.g., Splunk)" value="{{.ActiveFilter}}">
+                <button type="submit" class="btn btn-primary">Filter</button>
+                {{if .ActiveFilter}}
+                <a href="/" class="btn btn-secondary">Clear</a>
+                {{end}}
+            </form>
         </div>
 
         <div class="stats-grid">
@@ -106,7 +120,7 @@ func StartServer(dataFile string, port string) error {
         </div>
 
         <div class="chart-section">
-            <div class="chart-title">Tool Distribution by Subreddit (Who is talking about what?)</div>
+            <div class="chart-title">Tool Distribution by Subreddit {{if .ActiveFilter}}(Filtered: "{{.ActiveFilter}}"){{end}}</div>
             {{.StackedBarSnippet}}
         </div>
 
@@ -140,12 +154,42 @@ func StartServer(dataFile string, port string) error {
 `))
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		posts := loadData(dataFile)
+		allPosts := loadData(dataFile)
+		var filteredPosts []domain.Post
 
-		// --- 1. Aggregation ---
+		// --- 1. Filtering Logic ---
+		query := r.URL.Query().Get("q")
+		if query != "" {
+			query = strings.ToLower(strings.TrimSpace(query))
+			for _, p := range allPosts {
+				// Check if the query matches any identified tool OR the title
+				match := false
+
+				// Check detected tools
+				for _, k := range p.KeywordsHit {
+					if strings.Contains(strings.ToLower(k), query) {
+						match = true
+						break
+					}
+				}
+
+				// Optional: Also check detected title if you want broader search
+				// if strings.Contains(strings.ToLower(p.Title), query) { match = true }
+
+				if match {
+					filteredPosts = append(filteredPosts, p)
+				}
+			}
+		} else {
+			filteredPosts = allPosts
+		}
+
+		// Use filtered posts for the rest of the analysis
+		posts := filteredPosts
+
+		// --- 2. Aggregation ---
 		subCounts := make(map[string]int)
 		toolCounts := make(map[string]int)
-		// matrix[Subreddit][Tool] = Count
 		matrix := make(map[string]map[string]int)
 
 		uniqueSubs := make(map[string]bool)
@@ -172,7 +216,7 @@ func StartServer(dataFile string, port string) error {
 			}
 		}
 
-		// --- 2. KPI Calculation ---
+		// --- 3. KPI Calculation ---
 		topTool := "N/A"
 		maxT := 0
 		for k, v := range toolCounts {
@@ -191,7 +235,7 @@ func StartServer(dataFile string, port string) error {
 			}
 		}
 
-		// --- 3. Chart Preparation ---
+		// --- 4. Chart Preparation ---
 
 		// Sort Subreddits (X-Axis) Alphabetically
 		var xSubs []string
@@ -212,12 +256,12 @@ func StartServer(dataFile string, port string) error {
 		bar.SetGlobalOptions(
 			charts.WithInitializationOpts(opts.Initialization{
 				Theme:  types.ThemeWesteros,
-				Height: "500px", // Ensure height is set so it's not an empty box
+				Height: "500px",
 			}),
 			charts.WithTooltipOpts(opts.Tooltip{Show: boolPtr(true), Trigger: "axis", AxisPointer: &opts.AxisPointer{Type: "shadow"}}),
 			charts.WithLegendOpts(opts.Legend{Show: boolPtr(true), Bottom: "0"}),
 			charts.WithXAxisOpts(opts.XAxis{AxisLabel: &opts.AxisLabel{Rotate: 45}}),
-			charts.WithGridOpts(opts.Grid{Bottom: "15%", ContainLabel: boolPtr(true)}), // Prevent labels from being cut off
+			charts.WithGridOpts(opts.Grid{Bottom: "15%", ContainLabel: boolPtr(true)}),
 		)
 
 		bar.SetXAxis(xSubs)
@@ -226,17 +270,15 @@ func StartServer(dataFile string, port string) error {
 		for _, tool := range tools {
 			var data []opts.BarData
 			for _, sub := range xSubs {
-				// Get count for this specific Sub/Tool combo
 				val := matrix[sub][tool]
 				data = append(data, opts.BarData{Value: val})
 			}
-			// Stack: "total" forces them to stack
 			bar.AddSeries(tool, data).SetSeriesOptions(
 				charts.WithBarChartOpts(opts.BarChart{Stack: "total"}),
 			)
 		}
 
-		// --- 4. Render ---
+		// --- 5. Render ---
 		view := DashboardView{
 			StackedBarSnippet: renderSnippet(bar),
 			Posts:             posts,
@@ -244,6 +286,7 @@ func StartServer(dataFile string, port string) error {
 			TopTool:           topTool,
 			TopSub:            topSub,
 			HighestScore:      highestScore,
+			ActiveFilter:      r.URL.Query().Get("q"),
 		}
 
 		w.Header().Set("Content-Type", "text/html")
@@ -265,7 +308,6 @@ func renderSnippet(c snippetRenderer) template.HTML {
 func loadData(path string) []domain.Post {
 	f, err := os.Open(path)
 	if err != nil {
-		// Fail gracefully if file doesn't exist yet
 		return []domain.Post{}
 	}
 	defer f.Close()
@@ -281,7 +323,6 @@ func loadData(path string) []domain.Post {
 			posts = append(posts, p)
 		}
 	}
-	// Sort by Score Descending
 	sort.Slice(posts, func(i, j int) bool { return posts[i].Score > posts[j].Score })
 	return posts
 }

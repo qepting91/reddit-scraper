@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"strconv" // Added for converting env string to int
 	"strings"
 	"sync"
 	"syscall"
@@ -23,10 +24,20 @@ func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	slog.SetDefault(logger)
 
-	// FIX: Load Port from Env (Default to 8080 if missing)
+	// Load Port
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"
+	}
+
+	// NEW: Load Search Window Limit from .env
+	searchLimit := 25 // Default
+	if envLimit := os.Getenv("SEARCH_LIMIT"); envLimit != "" {
+		if val, err := strconv.Atoi(envLimit); err == nil && val > 0 && val <= 100 {
+			searchLimit = val
+		} else {
+			logger.Warn("Invalid SEARCH_LIMIT (must be 1-100), defaulting to 25", "val", envLimit)
+		}
 	}
 
 	// 2. Run Dashboard
@@ -41,13 +52,16 @@ func main() {
 	targets, _ := ingest.LoadTargets("input/subreddits.csv")
 	keywords, _ := ingest.LoadKeywords("input/keywords.csv")
 
-	// 4. Initialize Client (Using Factory)
+	// 4. Initialize Client
 	client, err := collector.NewCollector()
 	if err != nil {
 		logger.Error("Failed to initialize collector", "error", err)
 		os.Exit(1)
 	}
-	logger.Info("Collector initialized", "mode", os.Getenv("COLLECTOR_MODE"))
+	logger.Info("Collector initialized",
+		"mode", os.Getenv("COLLECTOR_MODE"),
+		"search_limit", searchLimit,
+	)
 
 	// 5. Concurrency Setup
 	jobQueue := make(chan domain.Target, len(targets))
@@ -62,10 +76,9 @@ func main() {
 	// Start Workers
 	ctx, cancel := context.WithCancel(context.Background())
 
-	// Adjust workers based on mode to prevent rate limiting
 	numWorkers := 4
 	if os.Getenv("COLLECTOR_MODE") == "public" {
-		numWorkers = 2 // Go slower for public JSON
+		numWorkers = 2
 	}
 
 	for i := 0; i < numWorkers; i++ {
@@ -77,7 +90,8 @@ func main() {
 				case <-ctx.Done():
 					return
 				default:
-					posts, err := client.FetchNewPosts(ctx, t.Subreddit, 25)
+					// USE THE VARIABLE HERE
+					posts, err := client.FetchNewPosts(ctx, t.Subreddit, searchLimit)
 					if err != nil {
 						logger.Error("Scrape failed", "sub", t.Subreddit, "err", err)
 						continue
@@ -118,6 +132,5 @@ func main() {
 	writerWg.Wait()
 	logger.Info("Scrape complete. Data saved.")
 
-	// Keep alive for dashboard
 	select {}
 }

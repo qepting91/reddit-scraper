@@ -1,0 +1,17 @@
+# Mode: 'public' (for now), 'api' (future), or 'mock' (testing)
+COLLECTOR_MODE=public
+
+# How many new posts to fetch per subreddit (Max 100 for public mode)
+SEARCH_LIMIT=50
+
+# The User Agent MUST include your real username
+REDDIT_USER_AGENT="desktop:intel-monitor:v1.0 (by /u/YourUsername)"
+
+# API Credentials (Leave empty while using COLLECTOR_MODE=public)
+REDDIT_CLIENT_ID=
+REDDIT_CLIENT_SECRET=
+REDDIT_USERNAME=
+REDDIT_PASSWORD=
+
+LOG_LEVEL=info
+PORT=8080
