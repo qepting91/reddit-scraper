@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"encoding/json"
 	"html/template"
-	"log"
 	"net/http"
 	"os"
 	"sort"
@@ -16,120 +15,117 @@ import (
 	"github.com/qepting91/reddit-scraper/internal/domain"
 )
 
-// DashboardView holds data for the HTML template, including new KPIs
+// DashboardView holds data for the HTML template
 type DashboardView struct {
-	PieSnippet   template.HTML
-	BarSnippet   template.HTML
-	HeatSnippet  template.HTML
-	Posts        []domain.Post
-	TotalPosts   int
-	TopThreat    string
-	HottestSub   string
-	HighestScore int
+	StackedBarSnippet template.HTML
+	Posts             []domain.Post
+	TotalMentions     int
+	TopTool           string
+	TopSub            string
+	HighestScore      int
 }
 
-// boolPtr helper
 func boolPtr(b bool) *bool { return &b }
 
 func StartServer(dataFile string, port string) error {
-	// 1. Define the HTML Template with KPI Cards and JS Filtering
+	// Clean, high-contrast "Analyst Report" template
 	tpl := template.Must(template.New("dashboard").Parse(`
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
     <meta charset="utf-8">
-    <title>Threat Intel Dashboard</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Tool Monitor Report</title>
     <script src="https://go-echarts.github.io/go-echarts-assets/assets/echarts.min.js"></script>
     <script src="https://go-echarts.github.io/go-echarts-assets/assets/themes/westeros.js"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
     <style>
-        body { background-color: #0f172a; color: #cbd5e1; font-family: 'Inter', sans-serif; margin: 0; padding: 20px; }
-        .container { max-width: 1600px; margin: 0 auto; }
+        :root { --bg: #f3f4f6; --card: #ffffff; --text: #111827; --border: #e5e7eb; --blue: #2563eb; }
+        body { background-color: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; margin: 0; padding: 30px; }
+        .container { max-width: 1400px; margin: 0 auto; }
         
-        /* Header & KPIs */
-        header { margin-bottom: 30px; border-bottom: 1px solid #334155; padding-bottom: 20px; }
-        h1 { color: #f8fafc; margin: 0; font-size: 1.8rem; }
-        .kpi-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 20px; margin-top: 20px; }
-        .kpi-card { background: #1e293b; padding: 20px; border-radius: 12px; border: 1px solid #334155; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); }
-        .kpi-label { color: #94a3b8; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; }
-        .kpi-value { color: #38bdf8; font-size: 2rem; font-weight: 800; margin-top: 5px; }
-        .kpi-value.danger { color: #f87171; }
+        /* Header Section */
+        .header { background: var(--card); padding: 20px 30px; border-radius: 8px; box-shadow: 0 1px 2px rgba(0,0,0,0.05); margin-bottom: 25px; display: flex; justify-content: space-between; align-items: center; }
+        h1 { margin: 0; font-size: 1.5rem; font-weight: 700; color: #1f2937; }
+        .subtitle { font-size: 0.875rem; color: #6b7280; margin-top: 4px; }
 
-        /* Charts */
-        .charts-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 30px; }
-        .chart-box { background: #1e293b; border-radius: 12px; padding: 15px; border: 1px solid #334155; overflow: hidden; }
-        .full-width { grid-column: 1 / -1; }
+        /* KPI Cards */
+        .stats-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 20px; margin-bottom: 25px; }
+        .stat-card { background: var(--card); padding: 20px; border-radius: 8px; border: 1px solid var(--border); }
+        .stat-label { font-size: 0.75rem; text-transform: uppercase; font-weight: 600; color: #6b7280; letter-spacing: 0.05em; }
+        .stat-value { font-size: 1.75rem; font-weight: 800; color: #111827; margin-top: 8px; }
+        .highlight { color: var(--blue); }
 
-        /* Table */
-        h2 { color: #f8fafc; font-size: 1.4rem; margin-bottom: 15px; display: flex; align-items: center; gap: 10px; }
-        .table-container { overflow-x: auto; border-radius: 12px; border: 1px solid #334155; }
-        table { width: 100%; border-collapse: collapse; background: #1e293b; }
-        th { background: #0f172a; text-align: left; padding: 16px; color: #94a3b8; font-weight: 600; border-bottom: 1px solid #334155; }
-        td { padding: 16px; border-bottom: 1px solid #334155; color: #e2e8f0; }
-        tr:hover { background: #334155; transition: background 0.2s; }
+        /* Chart Section */
+        .chart-section { background: var(--card); padding: 20px; border-radius: 8px; border: 1px solid var(--border); margin-bottom: 25px; }
+        .chart-title { font-size: 1rem; font-weight: 600; margin-bottom: 15px; color: #374151; }
         
-        /* Utilities */
-        a { color: #38bdf8; text-decoration: none; font-weight: 500; }
-        a:hover { text-decoration: underline; color: #7dd3fc; }
-        .tag { background: #334155; color: #cbd5e1; padding: 4px 10px; border-radius: 999px; font-size: 0.75rem; margin-right: 5px; display: inline-block; border: 1px solid #475569; }
-        .score-high { color: #f87171; font-weight: bold; } 
-        .score-med { color: #fbbf24; font-weight: bold; } 
+        /* Table Section */
+        .table-section { background: var(--card); border-radius: 8px; border: 1px solid var(--border); overflow: hidden; }
+        table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+        th { background: #f9fafb; text-align: left; padding: 12px 20px; border-bottom: 1px solid var(--border); color: #4b5563; font-weight: 600; }
+        td { padding: 12px 20px; border-bottom: 1px solid var(--border); color: #374151; }
+        tr:hover { background: #f9fafb; }
+        
+        /* Tags & Links */
+        .tag { background: #eff6ff; color: #1d4ed8; padding: 2px 10px; border-radius: 999px; font-size: 0.75rem; font-weight: 500; border: 1px solid #dbeafe; margin-right: 5px; display: inline-block; }
+        .score { font-family: monospace; font-weight: 700; color: #059669; background: #d1fae5; padding: 2px 6px; border-radius: 4px; }
+        a { color: #2563eb; text-decoration: none; font-weight: 500; }
+        a:hover { text-decoration: underline; }
     </style>
 </head>
 <body>
     <div class="container">
-        <header>
-            <h1>🛡️ Threat Intel Command Center</h1>
-            <div class="kpi-grid">
-                <div class="kpi-card">
-                    <div class="kpi-label">Total Intel Reports</div>
-                    <div class="kpi-value">{{.TotalPosts}}</div>
-                </div>
-                <div class="kpi-card">
-                    <div class="kpi-label">Top Detected Threat</div>
-                    <div class="kpi-value danger">{{.TopThreat}}</div>
-                </div>
-                <div class="kpi-card">
-                    <div class="kpi-label">Most Active Sector</div>
-                    <div class="kpi-value">{{.HottestSub}}</div>
-                </div>
-                <div class="kpi-card">
-                    <div class="kpi-label">Highest Impact Score</div>
-                    <div class="kpi-value">{{.HighestScore}}</div>
-                </div>
+        <div class="header">
+            <div>
+                <h1>Intelligence Monitor</h1>
+                <div class="subtitle">Tracking tool mentions across technical subreddits</div>
             </div>
-        </header>
-        
-        <div class="charts-grid">
-            <div class="chart-box">{{.PieSnippet}}</div>
-            <div class="chart-box" id="bar-container">{{.BarSnippet}}</div>
-            <div class="chart-box full-width">{{.HeatSnippet}}</div>
+            <div style="text-align: right;">
+                <div class="stat-label">Data Source</div>
+                <div style="font-weight: 600;">Local JSON</div>
+            </div>
         </div>
 
-        <h2>
-            🔍 Live Intelligence Feed 
-            <span style="font-size: 0.8rem; background: #334155; padding: 4px 8px; border-radius: 4px; color: #94a3b8; margin-left: auto;">
-                Tip: Click a bar in the "Top Threats" chart to filter this table
-            </span>
-        </h2>
-        <div class="table-container">
-            <table id="feedTable">
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-label">Total Mentions</div>
+                <div class="stat-value">{{.TotalMentions}}</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Most Discussed Tool</div>
+                <div class="stat-value highlight">{{.TopTool}}</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Most Active Subreddit</div>
+                <div class="stat-value">{{.TopSub}}</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Highest Post Upvotes</div>
+                <div class="stat-value">{{.HighestScore}}</div>
+            </div>
+        </div>
+
+        <div class="chart-section">
+            <div class="chart-title">Tool Distribution by Subreddit (Who is talking about what?)</div>
+            {{.StackedBarSnippet}}
+        </div>
+
+        <div class="table-section">
+            <table>
                 <thead>
                     <tr>
-                        <th>Impact</th>
-                        <th>Source</th>
-                        <th>Intelligence Summary</th>
-                        <th>Tags</th>
+                        <th width="100">Upvotes</th>
+                        <th width="150">Subreddit</th>
+                        <th>Post Title</th>
+                        <th>Tools Mentioned</th>
                     </tr>
                 </thead>
                 <tbody>
                     {{range .Posts}}
-                    <tr data-keywords="{{range .KeywordsHit}}{{.}} {{end}}">
-                        <td class="{{if ge .Score 100}}score-high{{else if ge .Score 50}}score-med{{end}}">
-                            {{.Score}}
-                        </td>
-                        <td><a href="https://reddit.com/{{.Subreddit}}" target="_blank">{{.Subreddit}}</a></td>
-                        <td><a href="{{.URL}}" target="_blank">{{.Title}}</a></td>
+                    <tr>
+                        <td><span class="score">⬆ {{.Score}}</span></td>
+                        <td><a href="https://reddit.com/{{.Subreddit}}" target="_blank">r/{{.Subreddit}}</a></td>
+                        <td><a href="{{.URL}}" target="_blank" style="color: #111827; font-weight: 400;">{{.Title}}</a></td>
                         <td>
                             {{range .KeywordsHit}}<span class="tag">{{.}}</span>{{end}}
                         </td>
@@ -139,40 +135,6 @@ func StartServer(dataFile string, port string) error {
             </table>
         </div>
     </div>
-
-    <script>
-        // 1. Filter Function
-        function filterTable(keyword) {
-            const rows = document.querySelectorAll("#feedTable tbody tr");
-            keyword = keyword.toLowerCase();
-            rows.forEach(row => {
-                const tags = row.getAttribute("data-keywords").toLowerCase();
-                if (tags.includes(keyword) || keyword === "") {
-                    row.style.display = "";
-                } else {
-                    row.style.display = "none";
-                }
-            });
-        }
-
-        // 2. Event Listener Attachment (Manual Method)
-        window.addEventListener('load', function() {
-            // We use a timeout to ensure the echarts library has fully initialized the DOM
-            setTimeout(function() {
-                // Retrieve the chart instance by the fixed ID we set in Go
-                const chartDom = document.getElementById('bar-chart-id');
-                if (chartDom) {
-                    const myChart = echarts.getInstanceByDom(chartDom);
-                    if (myChart) {
-                        myChart.on('click', function(params) {
-                            filterTable(params.name);
-                        });
-                        console.log("✅ Interactivity enabled for Bar Chart");
-                    }
-                }
-            }, 1000);
-        });
-    </script>
 </body>
 </html>
 `))
@@ -180,155 +142,121 @@ func StartServer(dataFile string, port string) error {
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		posts := loadData(dataFile)
 
-		// --- 1. Calculate KPIs ---
-		totalPosts := len(posts)
-		highestScore := 0
+		// --- 1. Aggregation ---
 		subCounts := make(map[string]int)
-		kwCounts := make(map[string]int)
+		toolCounts := make(map[string]int)
+		// matrix[Subreddit][Tool] = Count
+		matrix := make(map[string]map[string]int)
+
+		uniqueSubs := make(map[string]bool)
+		uniqueTools := make(map[string]bool)
+		highestScore := 0
 
 		for _, p := range posts {
 			if p.Score > highestScore {
 				highestScore = p.Score
 			}
-			subCounts[p.Subreddit]++
+			sub := p.Subreddit
+
+			subCounts[sub]++
+			uniqueSubs[sub] = true
+
+			if _, ok := matrix[sub]; !ok {
+				matrix[sub] = make(map[string]int)
+			}
+
 			for _, k := range p.KeywordsHit {
-				kwCounts[k]++
+				toolCounts[k]++
+				uniqueTools[k] = true
+				matrix[sub][k]++
 			}
 		}
 
-		topThreat := "None"
-		maxKwCount := 0
-		for k, v := range kwCounts {
-			if v > maxKwCount {
-				maxKwCount = v
-				topThreat = k
+		// --- 2. KPI Calculation ---
+		topTool := "N/A"
+		maxT := 0
+		for k, v := range toolCounts {
+			if v > maxT {
+				maxT = v
+				topTool = k
 			}
 		}
 
-		hottestSub := "None"
-		maxSubCount := 0
+		topSub := "N/A"
+		maxS := 0
 		for k, v := range subCounts {
-			if v > maxSubCount {
-				maxSubCount = v
-				hottestSub = k
+			if v > maxS {
+				maxS = v
+				topSub = k
 			}
 		}
 
-		// --- 2. Generate Charts ---
+		// --- 3. Chart Preparation ---
 
-		// PIE CHART
-		pie := charts.NewPie()
-		pie.SetGlobalOptions(
-			charts.WithTitleOpts(opts.Title{Title: "Volume by Source"}),
-			charts.WithInitializationOpts(opts.Initialization{Theme: types.ThemeWesteros, Height: "350px"}),
-			charts.WithLegendOpts(opts.Legend{Show: boolPtr(false)}),
-		)
-		var pieItems []opts.PieData
-		for k, v := range subCounts {
-			pieItems = append(pieItems, opts.PieData{Name: k, Value: v})
-		}
-		pie.AddSeries("Posts", pieItems)
-
-		// BAR CHART
-		bar := charts.NewBar()
-		bar.SetGlobalOptions(
-			charts.WithTitleOpts(opts.Title{Title: "Top Detected Threats"}),
-			// FIXED: Set a fixed ChartID so we can grab it with JS later
-			charts.WithInitializationOpts(opts.Initialization{
-				Theme:   types.ThemeWesteros,
-				Height:  "350px",
-				ChartID: "bar-chart-id",
-			}),
-		)
-		var barX []string
-		for k := range kwCounts {
-			barX = append(barX, k)
-		}
-		sort.Strings(barX)
-		var barY []opts.BarData
-		for _, k := range barX {
-			barY = append(barY, opts.BarData{Value: kwCounts[k]})
-		}
-		bar.SetXAxis(barX).AddSeries("Mentions", barY)
-
-		// HEATMAP
-		heatmap := charts.NewHeatMap()
-		heatmap.SetGlobalOptions(
-			charts.WithTitleOpts(opts.Title{Title: "Threat Heatmap"}),
-			charts.WithInitializationOpts(opts.Initialization{Theme: types.ThemeWesteros, Height: "400px"}),
-			charts.WithVisualMapOpts(opts.VisualMap{
-				Calculable: boolPtr(true),
-				Min:        0, Max: 5,
-				InRange: &opts.VisualMapInRange{Color: []string{"#1e293b", "#0ea5e9", "#ef4444"}},
-			}),
-		)
-
-		// Prepare Heatmap Data
-		uniqueSubsMap := make(map[string]bool)
-		uniqueKwsMap := make(map[string]bool)
-		grid := make(map[string]map[string]int)
-		for _, p := range posts {
-			uniqueSubsMap[p.Subreddit] = true
-			if _, exists := grid[p.Subreddit]; !exists {
-				grid[p.Subreddit] = make(map[string]int)
-			}
-			for _, k := range p.KeywordsHit {
-				uniqueKwsMap[k] = true
-				grid[p.Subreddit][k]++
-			}
-		}
+		// Sort Subreddits (X-Axis) Alphabetically
 		var xSubs []string
-		for k := range uniqueSubsMap {
-			xSubs = append(xSubs, k)
+		for s := range uniqueSubs {
+			xSubs = append(xSubs, s)
 		}
 		sort.Strings(xSubs)
-		var yKws []string
-		for k := range uniqueKwsMap {
-			yKws = append(yKws, k)
+
+		// Sort Tools (Series) Alphabetically
+		var tools []string
+		for t := range uniqueTools {
+			tools = append(tools, t)
 		}
-		sort.Strings(yKws)
-		var hmData []opts.HeatMapData
-		for i, sub := range xSubs {
-			for j, kw := range yKws {
-				val := grid[sub][kw]
-				hmData = append(hmData, opts.HeatMapData{Value: []interface{}{i, j, val}})
-			}
-		}
-		heatmap.SetXAxis(xSubs)
-		heatmap.SetGlobalOptions(
-			charts.WithYAxisOpts(opts.YAxis{Data: yKws, Type: "category", SplitArea: &opts.SplitArea{Show: boolPtr(true)}}),
+		sort.Strings(tools)
+
+		// Create Stacked Bar Chart
+		bar := charts.NewBar()
+		bar.SetGlobalOptions(
+			charts.WithInitializationOpts(opts.Initialization{
+				Theme:  types.ThemeWesteros,
+				Height: "500px", // Ensure height is set so it's not an empty box
+			}),
+			charts.WithTooltipOpts(opts.Tooltip{Show: boolPtr(true), Trigger: "axis", AxisPointer: &opts.AxisPointer{Type: "shadow"}}),
+			charts.WithLegendOpts(opts.Legend{Show: boolPtr(true), Bottom: "0"}),
+			charts.WithXAxisOpts(opts.XAxis{AxisLabel: &opts.AxisLabel{Rotate: 45}}),
+			charts.WithGridOpts(opts.Grid{Bottom: "15%", ContainLabel: boolPtr(true)}), // Prevent labels from being cut off
 		)
-		heatmap.AddSeries("Overlap", hmData)
 
-		// --- 3. Render View ---
-		sort.Slice(posts, func(i, j int) bool { return posts[i].Score > posts[j].Score })
+		bar.SetXAxis(xSubs)
 
+		// Add a series for each Tool found
+		for _, tool := range tools {
+			var data []opts.BarData
+			for _, sub := range xSubs {
+				// Get count for this specific Sub/Tool combo
+				val := matrix[sub][tool]
+				data = append(data, opts.BarData{Value: val})
+			}
+			// Stack: "total" forces them to stack
+			bar.AddSeries(tool, data).SetSeriesOptions(
+				charts.WithBarChartOpts(opts.BarChart{Stack: "total"}),
+			)
+		}
+
+		// --- 4. Render ---
 		view := DashboardView{
-			PieSnippet:   renderSnippet(pie),
-			BarSnippet:   renderSnippet(bar),
-			HeatSnippet:  renderSnippet(heatmap),
-			Posts:        posts,
-			TotalPosts:   totalPosts,
-			TopThreat:    topThreat,
-			HottestSub:   hottestSub,
-			HighestScore: highestScore,
+			StackedBarSnippet: renderSnippet(bar),
+			Posts:             posts,
+			TotalMentions:     len(posts),
+			TopTool:           topTool,
+			TopSub:            topSub,
+			HighestScore:      highestScore,
 		}
 
 		w.Header().Set("Content-Type", "text/html")
-		if err := tpl.Execute(w, view); err != nil {
-			log.Printf("Template error: %v", err)
-		}
+		tpl.Execute(w, view)
 	})
 
 	return http.ListenAndServe(":"+port, nil)
 }
 
-// Interface matching the library's RenderSnippet signature
 type snippetRenderer interface {
 	RenderSnippet() render.ChartSnippet
 }
 
-// Helper to render just the chart DIV and Script
 func renderSnippet(c snippetRenderer) template.HTML {
 	s := c.RenderSnippet()
 	return template.HTML(s.Element + "\n" + s.Script)
@@ -337,9 +265,11 @@ func renderSnippet(c snippetRenderer) template.HTML {
 func loadData(path string) []domain.Post {
 	f, err := os.Open(path)
 	if err != nil {
+		// Fail gracefully if file doesn't exist yet
 		return []domain.Post{}
 	}
 	defer f.Close()
+
 	var posts []domain.Post
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
@@ -351,5 +281,7 @@ func loadData(path string) []domain.Post {
 			posts = append(posts, p)
 		}
 	}
+	// Sort by Score Descending
+	sort.Slice(posts, func(i, j int) bool { return posts[i].Score > posts[j].Score })
 	return posts
 }

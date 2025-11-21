@@ -10,37 +10,33 @@ import (
 	"golang.org/x/time/rate"
 )
 
-type RedditClient struct {
+type APIClient struct {
 	client  *reddit.Client
 	limiter *rate.Limiter
 }
 
-// NewClient now requires a userAgent string to comply with Reddit's API rules
-func NewClient(id, secret, user, pass, userAgent string) (*RedditClient, error) {
+func NewAPIClient(id, secret, user, pass, userAgent string) (*APIClient, error) {
 	creds := reddit.Credentials{ID: id, Secret: secret, Username: user, Password: pass}
 
-	// Use the passed userAgent instead of a hardcoded string
 	client, err := reddit.NewClient(creds, reddit.WithUserAgent(userAgent))
 	if err != nil {
 		return nil, err
 	}
 
-	// Rate Limit: Token Bucket Algorithm
-	// 100 requests / 10 mins = ~1 request every 600ms
-	limiter := rate.NewLimiter(rate.Every(600*time.Millisecond), 1)
+	// API Rate Limit: ~60 reqs/min (safe buffer)
+	limiter := rate.NewLimiter(rate.Every(1*time.Second), 1)
 
-	return &RedditClient{client: client, limiter: limiter}, nil
+	return &APIClient{client: client, limiter: limiter}, nil
 }
 
-func (rc *RedditClient) FetchNewPosts(ctx context.Context, sub string, limit int) ([]domain.Post, error) {
-	// Wait for token
-	if err := rc.limiter.Wait(ctx); err != nil {
+func (ac *APIClient) FetchNewPosts(ctx context.Context, sub string, limit int) ([]domain.Post, error) {
+	if err := ac.limiter.Wait(ctx); err != nil {
 		return nil, err
 	}
 
-	posts, _, err := rc.client.Subreddit.NewPosts(ctx, sub, &reddit.ListOptions{Limit: limit})
+	posts, _, err := ac.client.Subreddit.NewPosts(ctx, sub, &reddit.ListOptions{Limit: limit})
 	if err != nil {
-		return nil, fmt.Errorf("API error: %w", err)
+		return nil, fmt.Errorf("authenticated api error: %w", err)
 	}
 
 	var result []domain.Post
